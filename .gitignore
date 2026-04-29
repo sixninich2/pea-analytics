@@ -1,0 +1,40 @@
+# Python
+# Claude Code local config
+echo "" >> .gitignore
+echo "# Claude Code local files" >> .gitignore
+echo ".claude/" >> .gitignore
+echo ".claude.zip*" >> .gitignore
+echo "*.zip" >> .gitignore
+.claude/
+# Compiled Python (déjà couvert par __pycache__/ mais on force)
+*.pyc
+*.pyo
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# Real PEA data — never commit
+data/transactions.csv
+data/pea_analytics.db
+data/private/
+
+# yfinance cache
+.cache/
+*.cache
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Logs
+*.log
+logs/
