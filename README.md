@@ -1,158 +1,147 @@
-# PEA Analytics System
-**M GENTY MATTHIEU — Crédit Mutuel PEA**
-Opened: 05/02/2025 | Tax-free withdrawal: 05/02/2030
+# PEA Analytics
 
----
+A local analytics dashboard for a French PEA (Plan d'Épargne en Actions) brokerage account. Tracks transactions, computes performance and risk metrics, and produces a complete cost view that accounts for the actual French broker fee structure: tiered commissions, TTF on French large caps, custody fees, intraday discounts.
 
-## Quick Start
+Built as a personal project to understand how a portfolio analytics stack is wired end to end, from CSV ingestion to risk metrics to a multi-page web dashboard.
 
-```bash
-# 1. Install dependencies
-pip install -r requirements.txt
+## What it does
 
-# 2. Run everything (ingest data + open dashboard)
-python main.py
+The application ingests a transaction history from CSV, validates and persists it to SQLite, fetches prices and fundamentals from yfinance, and exposes the results through a seven-page Dash interface running locally:
 
-# 3. Open browser
-open http://localhost:8050
-```
+| Page | Content |
+|------|---------|
+| `/` | Portfolio value vs benchmark, KPIs, allocation, cost overview |
+| `/performance` | TWR, IRR, drawdown, invested vs market value |
+| `/risk` | Volatility, Sharpe, beta, VaR, correlation heatmap, efficient frontier |
+| `/costs` | Broker fees, TTF, spread, slippage, break-even per position |
+| `/screening` | European PEA-eligible universe ranked by composite score |
+| `/recommendations` | BUY / HOLD / REDUCE / EXIT signal cards with reasoning |
+| `/validate` | Pre-ingestion CSV review, fields tagged confirmed / inferred / missing |
 
----
+## Tech stack
 
-## Project Structure
+* Python 3.12
+* Dash and Plotly for the web dashboard
+* SQLAlchemy on SQLite for transaction and price persistence
+* pandas for return and risk calculations
+* yfinance for prices and fundamentals, with a retry plus DB cache fallback chain
+
+## Architecture
 
 ```
 pea_analytics/
-├── main.py                      # Entry point
-├── config.py                    # Crédit Mutuel fee rules + account settings
+├── main.py                    # CLI entry point
+├── config.py                  # Fee constants, PEA metadata, thresholds
 ├── requirements.txt
-├── data/
-│   └── transactions.csv         # YOUR REAL TRANSACTION HISTORY ← edit this
+├── data/                      # Local only, gitignored
 ├── db/
-│   └── models.py                # SQLite schema (auto-created)
+│   └── models.py              # Transaction, Price, Fundamental schema
 ├── ingestion/
-│   ├── parser.py                # CSV ingestion + FIFO cost basis
-│   └── market_data.py           # yfinance price fetcher + screening
+│   ├── parser.py              # CSV → FIFO cost basis → DB upsert
+│   ├── market_data.py         # yfinance fetcher with retry and DB fallback
+│   └── validator.py           # Pre-ingestion field tagger
 ├── analytics/
-│   ├── performance.py           # TWR, IRR, PnL, benchmark
-│   ├── costs.py                 # Hidden cost analysis + break-even
-│   └── risk.py                  # Volatility, Sharpe, drawdown, frontier
+│   ├── performance.py         # TWR, MWR / IRR, P&L, benchmark comparison
+│   ├── costs.py               # Broker fees, TTF, spread, break-even
+│   └── risk.py                # Vol, Sharpe, VaR, drawdown, frontier
 ├── recommendations/
-│   └── engine.py                # BUY/HOLD/REDUCE signal generator
+│   └── engine.py              # Signal generation
+├── screening/                 # Composite score ranking module
 └── dashboard/
-    └── app.py                   # Interactive Dash dashboard
+    ├── app.py                 # Seven-page Dash application
+    └── pages/
 ```
 
----
+## Crédit Mutuel fee model
 
-## Adding Your Transactions
+The cost engine encodes the 2026 Crédit Mutuel PEA fee schedule:
 
-Edit `data/transactions.csv`. Required columns:
+* Tiered Euronext stock commission (0.50% / 0.35% / 0.25%) based on rolling twelve-month order count
+* 0.50% buy fee on ETFs and OPCs, free on sale
+* 50% intraday discount applied from the second order onward on the same security, same day
+* 0.40% TTF on French large caps over €1B market cap, buy side only
+* Semestrial custody fee (0.125%, min €6, max €75) generated dynamically through the PEA lock period
 
-| Column | Description | Example |
-|--------|-------------|---------|
-| date | Trade date (YYYY-MM-DD) | 2025-03-11 |
-| ticker | Euronext ticker (Yahoo Finance format) | ESE.PA |
-| name | Full security name | BNPP Easy S&P 500 UCITS ETF |
-| quantity | Shares bought (+) or sold (-) | 10 |
-| exec_price | Execution price per share | 25.7102 |
-| fees | Broker fee paid (leave 0 to auto-compute) | 12.86 |
-| type | BUY / SELL / DIVIDEND / DEPOSIT | BUY |
-| currency | EUR | EUR |
-| asset_type | STOCK or ETF | ETF |
-| market | EURONEXT | EURONEXT |
+Realised P&L, break-even prices and benchmark comparisons all reflect what the account actually pays, not a generic 0.5% assumption.
 
-### Your Current Transactions (from SMS)
+## Built with Claude Code
 
-| Date | Action | Security | Qty | Price |
-|------|--------|----------|-----|-------|
-| 2025-02-05 | DEPOSIT | Initial deposit | — | 1000.00 |
-| 2025-03-11 | BUY | BNPP Easy S&P 500 ETF (ESE.PA) | 10 | 25.7102 |
-| 2025-04-09 | BUY | BNPP Easy S&P 500 ETF (ESE.PA) | 10 | 22.6234 |
-| 2026-01-12 | SELL | BNPP Easy S&P 500 ETF (ESE.PA) | -20 | 30.1632 |
-| 2026-01-20 | BUY | TotalEnergies SE (TTE.PA) | 5 | 55.67 |
-| 2026-01-20 | BUY | BNPP Easy S&P 500 ETF (ESE.PA) | 12 | 29.5352 |
+The project was developed with Claude Code as a coding collaborator over two phases.
 
-> Add any transactions you see in the SMS screenshots that are cut off.
+**Initial build.** Claude Code scaffolded the seventeen-file architecture, wrote the SQLAlchemy models, the CSV ingestion pipeline, the FIFO cost basis logic, the seven dashboard pages and the initial fee engine. Roughly 2,500 lines of Python.
 
----
+**Phase 1 audit and fix.** A full code review surfaced seven bugs ranging from low to high severity:
 
-## Crédit Mutuel Fee Structure (Encoded in config.py)
+1. IRR was timed from each transaction date instead of the portfolio start, producing the wrong money-weighted return
+2. TWR did not reset sub-periods on BUY and SELL events, only on DEPOSIT
+3. Benchmark was hardcoded to CAC 40 despite a portfolio with significant US ETF exposure
+4. Intraday 50% discount was defined in config but never applied in the parser
+5. TTF was excluded from the FIFO cost basis, overstating realised P&L
+6. Custody fee loop was hardcoded to 2026 even though the PEA is locked through 2030
+7. Fidélité Bourse tier lookup used a 365-day subtraction instead of twelve calendar months, breaking around leap years
 
-| Fee Type | Rate | Condition |
-|----------|------|-----------|
-| Euronext stocks (online) | **0.50%** | Standard (≤10 qualifying orders/12M) |
-| Euronext stocks (online) | **0.35%** | Fidélité Bourse tier 2 (11–20 orders >2000€) |
-| Euronext stocks (online) | **0.25%** | Fidélité Bourse tier 3 (21+ orders >2000€) |
-| ETF / OPC (buy) | **0.50%** | On purchase only |
-| ETF / OPC (sell) | **FREE** | No exit fee |
-| TTF | **0.40%** | BUY only, French large-caps >1B€ market cap |
-| Custody (Frais de Convention) | **0.125%/semester** | Min €6, max €75, calculated on Jun 30 / Dec 31 |
-| Transfer out | **€15/line** | Max €150 per PEA |
+All seven were fixed. The default benchmark moved to the Euro Stoxx 50 with a runtime dropdown on the performance page. A new `validator.py` module was inserted between CSV parsing and DB write so every field is tagged confirmed, inferred or missing before any data is persisted. yfinance fetches now retry with exponential backoff and fall back to the cached SQLite prices when the network fails.
 
-**Your TotalEnergies (TTE.PA) buy incurs both broker fee + TTF:**
-- 5 shares × 55.67€ = 278.35€ notional
-- Broker fee: 278.35 × 0.50% = €1.39
-- TTF: 278.35 × 0.40% = €1.11
-- Total entry cost: €280.85
+Code was reviewed before each commit. Claude Code produced the implementation; the architecture, the financial logic and the validation criteria were specified and verified manually.
 
----
+## Getting started
 
-## PEA Tax Rules
-
-| Event | Tax Treatment |
-|-------|--------------|
-| Gains before 5 years (before 05/02/2030) | PFU 30% (12.8% IR + 17.2% PS) |
-| Gains after 5 years (after 05/02/2030) | Social charges only: 17.2% |
-| Dividends inside PEA | Tax-free (no withholding) |
-| Max lifetime contribution | €150,000 |
-| Withdrawal before 5 years | Closes the PEA + full taxation |
-
----
-
-## Dashboard Pages
-
-| URL | Content |
-|-----|---------|
-| `/` | Portfolio value vs CAC 40, KPIs, allocation, costs |
-| `/performance` | TWR, IRR, drawdown, invested vs market value |
-| `/risk` | Correlation heatmap, Sharpe, beta, VaR, efficient frontier |
-| `/costs` | Broker fees, TTF, spread, slippage, break-even per position |
-| `/screening` | European PEA universe ranked by composite score |
-| `/recommendations` | BUY/HOLD/REDUCE signal cards with reasoning |
-
----
-
-## Commands
+### Install
 
 ```bash
-# Full run (default)
-python main.py
-
-# Only ingest / refresh prices
-python main.py --ingest
-
-# Only launch dashboard (uses cached DB data)
-python main.py --dashboard
-
-# Terminal report (no dashboard)
-python main.py --report
+git clone https://github.com/sixninich2/pea-analytics.git
+cd pea-analytics
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
----
+### Create your transaction file
 
-## Optional: Refinitiv API
+The repository does not ship with sample data. Create your own `data/transactions.csv` with the following columns:
 
-If you have LSEG Workspace or Refinitiv API credentials, set:
+| Column | Required | Example |
+|--------|----------|---------|
+| `date` | Yes | `2026-01-20` |
+| `ticker` | Yes | `ESE.PA` |
+| `name` | No | `BNPP Easy S&P 500 UCITS ETF` |
+| `quantity` | Yes | `12` for BUY, negative on SELL |
+| `exec_price` | Yes | `29.5352` |
+| `fees` | No | `0` to auto-compute |
+| `type` | Yes | `BUY` / `SELL` / `DIVIDEND` / `DEPOSIT` |
+| `currency` | No | `EUR` |
+| `asset_type` | No | `ETF` or `STOCK` |
+| `market` | No | `EURONEXT` |
 
-```env
-# .env
-REFINITIV_APP_KEY=your_key_here
+Optional columns are auto-inferred when blank by the validator module.
+
+### Run
+
+```bash
+python main.py              # ingest plus launch dashboard (default)
+python main.py --ingest     # ingest CSV and refresh prices only
+python main.py --dashboard  # launch dashboard from cached DB
+python main.py --report     # terminal performance, risk and cost report
+python main.py --force      # skip the validation gate on ingestion
 ```
 
-The system will automatically use Refinitiv for fundamentals and screening.
-Without it, yfinance is used — fully functional for all calculations.
+The dashboard opens at `http://localhost:8050`.
 
----
+## Privacy
 
-*Built for M GENTY MATTHIEU · Crédit Mutuel PEA · Conditions 01/2026*
+Real transaction data and the generated SQLite database are gitignored. The `data/` folder is intentionally empty in the repository; users provide their own CSV.
+
+## Known gaps
+
+* No Refinitiv / LSEG API integration; all fundamentals come from yfinance
+* The screening universe in `market_data.py` is a static list, not auto-refreshed
+* The efficient frontier uses historical covariance and is not re-optimised automatically on portfolio changes
+
+## Disclaimer
+
+Personal learning project. Nothing in this repository constitutes financial or investment advice.
+
+## Author
+
+Matthieu Genty, Master in Finance candidate, ESSCA School of Management.
+[LinkedIn](https://www.linkedin.com/in/matthieu-genty/) · [GitHub](https://github.com/sixninich2)
